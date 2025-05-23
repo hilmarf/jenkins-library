@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"strings"
 	"sync"
+
+	"github.com/sirupsen/logrus"
 )
 
 type logTarget interface {
-	Info(args ...interface{})
+	Log(level logrus.Level, args ...interface{})
 	Warn(args ...interface{})
 	Error(args ...interface{})
 }
@@ -18,6 +20,7 @@ type logTarget interface {
 // larger than 64K without linebreaks.
 // Implementation copied from https://github.com/sirupsen/logrus/issues/564
 type logrusWriter struct {
+	level  logrus.Level
 	logger logTarget
 	buffer bytes.Buffer
 	mutex  sync.Mutex
@@ -54,7 +57,7 @@ func (w *logrusWriter) alwaysFlush() {
 	} else if strings.Contains(message, "WARN") {
 		w.logger.Warn(message)
 	} else {
-		w.logger.Info(message)
+		w.logger.Log(w.level, message)
 	}
 }
 

@@ -81,7 +81,12 @@ func Entry() *logrus.Entry {
 
 // Writer returns an io.Writer into which a tool's output can be redirected.
 func Writer() io.Writer {
-	return &logrusWriter{logger: Entry()}
+	return &logrusWriter{logger: Entry(), level: logrus.InfoLevel}
+}
+
+// DebugWriter returns an io.Writer into which a tool's output can be redirected. It's default log level is debug.
+func DebugWriter() io.Writer {
+	return &logrusWriter{logger: Entry(), level: logrus.DebugLevel}
 }
 
 // SetVerbose sets the log level with respect to verbose flag.

@@ -5,9 +5,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/mitchellh/mapstructure"
-	"github.com/pkg/errors"
-
 	"github.com/SAP/jenkins-library/pkg/buildsettings"
 	"github.com/SAP/jenkins-library/pkg/certutils"
 	"github.com/SAP/jenkins-library/pkg/command"
@@ -17,6 +14,8 @@ import (
 	"github.com/SAP/jenkins-library/pkg/piperutils"
 	"github.com/SAP/jenkins-library/pkg/syft"
 	"github.com/SAP/jenkins-library/pkg/telemetry"
+	"github.com/mitchellh/mapstructure"
+	"github.com/pkg/errors"
 )
 
 func kanikoExecute(config kanikoExecuteOptions, telemetryData *telemetry.CustomData, commonPipelineEnvironment *kanikoExecuteCommonPipelineEnvironment) {
@@ -383,6 +382,10 @@ func runKaniko(config *kanikoExecuteOptions, dockerFilepath string, buildOptions
 	for label, value := range config.Labels {
 		kanikoOpts = append(kanikoOpts, "--label", fmt.Sprintf("%s=%s", label, value))
 	}
+
+	kanikoOpts = append(kanikoOpts, "--label", fmt.Sprintf("org.opencontainers.image.version=%s", config.ContainerImageTag))
+
+	kanikoOpts = append(kanikoOpts, "--build-arg", fmt.Sprintf("ContainerImageTag=%s", config.ContainerImageTag))
 
 	tmpDir, err := fileUtils.TempDir("", "*-kanikoExecute")
 	if err != nil {
