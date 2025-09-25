@@ -18,12 +18,17 @@ type Details struct {
 type MonitoringData struct {
 	PipelineUrlHash string `json:"PipelineUrlHash,omitempty"`
 	BuildUrlHash    string `json:"BuildUrlHash,omitempty"`
+	Orchestrator    string `json:"Orchestrator,omitempty"`
+	// TemplateName indicates what template was used to run the pipeline (gpp, oss, ctp or custom)
+	TemplateName    string `json:"TemplateName,omitempty"`
+	PiperCommitHash string `json:"PiperCommitHash,omitempty"`
 	StageName       string `json:"StageName,omitempty"`
 	StepName        string `json:"StepName,omitempty"`
 	ExitCode        string `json:"ExitCode,omitempty"`
 	Duration        string `json:"Duration,omitempty"`
 	ErrorCode       string `json:"ErrorCode,omitempty"`
 	ErrorCategory   string `json:"ErrorCategory,omitempty"`
+	ErrorMessage    string `json:"ErrorMessage,omitempty"`
 	CorrelationID   string `json:"CorrelationId,omitempty"`
 	CommitHash      string `json:"CommitHash,omitempty"`
 	Branch          string `json:"Branch,omitempty"`
@@ -37,7 +42,6 @@ type LogFileEvent struct {
 	Source     string `json:"source"`     // optional description of the source of the event; typically the app's name
 	SourceType string `json:"sourcetype"` // optional name of a Splunk parsing configuration; this is usually inferred by Splunk
 	Index      string `json:"index"`      // optional name of the Splunk index to store the event in; not required if the token has a default index set in Splunk
-
 }
 
 type DetailsTelemetry struct {

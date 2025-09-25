@@ -10,12 +10,14 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/SAP/jenkins-library/pkg/log"
+	"github.com/SAP/jenkins-library/pkg/piperutils"
 	CredentialUtils "github.com/SAP/jenkins-library/pkg/piperutils"
+	"github.com/SAP/jenkins-library/pkg/versioning"
 )
 
 type npmMinimalPackageDescriptor struct {
-	Name    string `json:version`
-	Version string `json:version`
+	Name    string `json:"name"`
+	Version string `json:"version"`
 }
 
 func (pd *npmMinimalPackageDescriptor) Scope() string {
@@ -31,7 +33,7 @@ func (pd *npmMinimalPackageDescriptor) Scope() string {
 }
 
 // PublishAllPackages executes npm publish for all package.json files defined in packageJSONFiles list
-func (exec *Execute) PublishAllPackages(packageJSONFiles []string, registry, username, password string, packBeforePublish bool) error {
+func (exec *Execute) PublishAllPackages(packageJSONFiles []string, registry, username, password string, packBeforePublish bool, buildCoordinates *[]versioning.Coordinates) error {
 	for _, packageJSON := range packageJSONFiles {
 		log.Entry().Infof("triggering publish for %s", packageJSON)
 
@@ -43,7 +45,7 @@ func (exec *Execute) PublishAllPackages(packageJSONFiles []string, registry, use
 			return fmt.Errorf("package.json file '%s' not found: %w", packageJSON, err)
 		}
 
-		err = exec.publish(packageJSON, registry, username, password, packBeforePublish)
+		err = exec.publish(packageJSON, registry, username, password, packBeforePublish, buildCoordinates)
 		if err != nil {
 			return err
 		}
@@ -52,7 +54,7 @@ func (exec *Execute) PublishAllPackages(packageJSONFiles []string, registry, use
 }
 
 // publish executes npm publish for package.json
-func (exec *Execute) publish(packageJSON, registry, username, password string, packBeforePublish bool) error {
+func (exec *Execute) publish(packageJSON, registry, username, password string, packBeforePublish bool, buildCoordinates *[]versioning.Coordinates) error {
 	execRunner := exec.Utils.GetExecRunner()
 
 	oldWorkingDirectory, err := exec.Utils.Getwd()
@@ -82,7 +84,7 @@ func (exec *Execute) publish(packageJSON, registry, username, password string, p
 	log.Entry().Debug("adding tmp to npmignore")
 	npmignore.Add("tmp/")
 	log.Entry().Debug("adding sboms to npmignore")
-	npmignore.Add("**/bom*.xml")
+	npmignore.Add("**/bom*.{xml,json}")
 
 	npmrc := NewNPMRC(filepath.Dir(packageJSON))
 
@@ -199,6 +201,26 @@ func (exec *Execute) publish(packageJSON, registry, username, password string, p
 		err := execRunner.RunExecutable("npm", "publish", "--userconfig", npmrc.filepath, "--registry", registry)
 		if err != nil {
 			return errors.Wrap(err, "failed publishing artifact")
+		}
+	}
+
+	options := versioning.Options{}
+	var utils versioning.Utils
+
+	artifact, err := versioning.GetArtifact("npm", packageJSON, &options, utils)
+	if err != nil {
+		log.Entry().Warnf("unable to get artifact metdata : %v", err)
+	} else {
+		coordinate, err := artifact.GetCoordinates()
+		if err != nil {
+			log.Entry().Warnf("unable to get artifact coordinates : %v", err)
+		} else {
+			coordinate.BuildPath = filepath.Dir(packageJSON)
+			coordinate.URL = registry
+			coordinate.Packaging = "tgz"
+			coordinate.PURL = piperutils.GetPurl(filepath.Join(filepath.Dir(packageJSON), npmBomFilename))
+
+			*buildCoordinates = append(*buildCoordinates, coordinate)
 		}
 	}
 

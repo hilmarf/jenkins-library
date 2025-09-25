@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SAP/jenkins-library/pkg/config"
+	"github.com/SAP/jenkins-library/pkg/gcp"
 	"github.com/SAP/jenkins-library/pkg/gcs"
 	"github.com/SAP/jenkins-library/pkg/log"
 	"github.com/SAP/jenkins-library/pkg/piperenv"
@@ -45,6 +46,10 @@ type codeqlExecuteScanOptions struct {
 	GlobalSettingsFile          string `json:"globalSettingsFile,omitempty"`
 	DatabaseCreateFlags         string `json:"databaseCreateFlags,omitempty"`
 	DatabaseAnalyzeFlags        string `json:"databaseAnalyzeFlags,omitempty"`
+	CustomCommand               string `json:"customCommand,omitempty"`
+	TransformQuerySuite         string `json:"transformQuerySuite,omitempty"`
+	Paths                       string `json:"paths,omitempty"`
+	PathsIgnore                 string `json:"pathsIgnore,omitempty"`
 }
 
 type codeqlExecuteScanInflux struct {
@@ -117,10 +122,8 @@ func (p *codeqlExecuteScanReports) persist(stepConfig codeqlExecuteScanOptions, 
 		{FilePattern: "**/toolrun_codeql_*.json", ParamRef: "", StepResultType: "codeql"},
 		{FilePattern: "**/piper_codeql_report.json", ParamRef: "", StepResultType: "codeql"},
 	}
-	envVars := []gcs.EnvVar{
-		{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: gcpJsonKeyFilePath, Modified: false},
-	}
-	gcsClient, err := gcs.NewClient(gcs.WithEnvVars(envVars))
+
+	gcsClient, err := gcs.NewClient(gcpJsonKeyFilePath, "")
 	if err != nil {
 		log.Entry().Errorf("creation of GCS client failed: %v", err)
 		return
@@ -168,15 +171,29 @@ and Java plus Maven.`,
 
 			GeneralConfig.GitHubAccessTokens = ResolveAccessTokens(GeneralConfig.GitHubTokens)
 
-			path, _ := os.Getwd()
+			path, err := os.Getwd()
+			if err != nil {
+				return err
+			}
 			fatalHook := &log.FatalHook{CorrelationID: GeneralConfig.CorrelationID, Path: path}
 			log.RegisterHook(fatalHook)
 
-			err := PrepareConfig(cmd, &metadata, STEP_NAME, &stepConfig, config.OpenPiperFile)
+			err = PrepareConfig(cmd, &metadata, STEP_NAME, &stepConfig, config.OpenPiperFile)
 			if err != nil {
 				log.SetErrorCategory(log.ErrorConfiguration)
 				return err
 			}
+
+			// Set step error patterns for improved error detection
+			stepErrors := make([]log.StepError, len(metadata.Metadata.Errors))
+			for i, err := range metadata.Metadata.Errors {
+				stepErrors[i] = log.StepError{
+					Pattern:  err.Pattern,
+					Message:  err.Message,
+					Category: err.Category,
+				}
+			}
+			log.SetStepErrors(stepErrors)
 			log.RegisterSecret(stepConfig.GithubToken)
 
 			if len(GeneralConfig.HookConfig.SentryConfig.Dsn) > 0 {
@@ -206,6 +223,11 @@ and Java plus Maven.`,
 			return nil
 		},
 		Run: func(_ *cobra.Command, _ []string) {
+			vaultClient := config.GlobalVaultClient()
+			if vaultClient != nil {
+				defer vaultClient.MustRevokeToken()
+			}
+
 			stepTelemetryData := telemetry.CustomData{}
 			stepTelemetryData.ErrorCode = "1"
 			handler := func() {
@@ -216,7 +238,7 @@ and Java plus Maven.`,
 				stepTelemetryData.ErrorCategory = log.GetErrorCategory().String()
 				stepTelemetryData.PiperCommitHash = GitCommit
 				telemetryClient.SetData(&stepTelemetryData)
-				telemetryClient.Send()
+				telemetryClient.LogStepTelemetryData()
 				if len(GeneralConfig.HookConfig.SplunkConfig.Dsn) > 0 {
 					splunkClient.Initialize(GeneralConfig.CorrelationID,
 						GeneralConfig.HookConfig.SplunkConfig.Dsn,
@@ -233,10 +255,23 @@ and Java plus Maven.`,
 						GeneralConfig.HookConfig.SplunkConfig.SendLogs)
 					splunkClient.Send(telemetryClient.GetData(), logCollector)
 				}
+				if GeneralConfig.HookConfig.GCPPubSubConfig.Enabled {
+					err := gcp.NewGcpPubsubClient(
+						vaultClient,
+						GeneralConfig.HookConfig.GCPPubSubConfig.ProjectNumber,
+						GeneralConfig.HookConfig.GCPPubSubConfig.IdentityPool,
+						GeneralConfig.HookConfig.GCPPubSubConfig.IdentityProvider,
+						GeneralConfig.CorrelationID,
+						GeneralConfig.HookConfig.OIDCConfig.RoleID,
+					).Publish(GeneralConfig.HookConfig.GCPPubSubConfig.Topic, telemetryClient.GetDataBytes())
+					if err != nil {
+						log.Entry().WithError(err).Warn("event publish failed")
+					}
+				}
 			}
 			log.DeferExitHandler(handler)
 			defer handler()
-			telemetryClient.Initialize(GeneralConfig.NoTelemetry, STEP_NAME, GeneralConfig.HookConfig.PendoConfig.Token)
+			telemetryClient.Initialize(STEP_NAME)
 			codeqlExecuteScan(stepConfig, &stepTelemetryData, &influx)
 			stepTelemetryData.ErrorCode = "0"
 			log.Entry().Info("SUCCESS")
@@ -251,7 +286,7 @@ func addCodeqlExecuteScanFlags(cmd *cobra.Command, stepConfig *codeqlExecuteScan
 	cmd.Flags().StringVar(&stepConfig.GithubToken, "githubToken", os.Getenv("PIPER_githubToken"), "GitHub personal access token in plain text. NEVER set this parameter in a file commited to a source code repository. This parameter is intended to be used from the command line or set securely via the environment variable listed below. In most pipeline use-cases, you should instead either store the token in Vault (where it can be automatically retrieved by the step from one of the paths listed below) or store it as a Jenkins secret and configure the secret's id via the `githubTokenCredentialsId` parameter.")
 	cmd.Flags().StringVar(&stepConfig.BuildTool, "buildTool", `maven`, "Defines the build tool which is used for building the project.")
 	cmd.Flags().StringVar(&stepConfig.BuildCommand, "buildCommand", os.Getenv("PIPER_buildCommand"), "Command to build the project")
-	cmd.Flags().StringVar(&stepConfig.Language, "language", os.Getenv("PIPER_language"), "The programming language used to analyze.")
+	cmd.Flags().StringVar(&stepConfig.Language, "language", os.Getenv("PIPER_language"), "The programming language used to analyze. Use coma separation and select custom build tool to analyze multiple languages")
 	cmd.Flags().StringVar(&stepConfig.ModulePath, "modulePath", `./`, "Allows providing the path for the module to scan")
 	cmd.Flags().StringVar(&stepConfig.Database, "database", `codeqlDB`, "Path to the CodeQL database to create. This directory will be created, and must not already exist.")
 	cmd.Flags().StringVar(&stepConfig.QuerySuite, "querySuite", os.Getenv("PIPER_querySuite"), "The name of a CodeQL query suite. If omitted, the default query suite for the language of the database being analyzed will be used.")
@@ -271,6 +306,10 @@ func addCodeqlExecuteScanFlags(cmd *cobra.Command, stepConfig *codeqlExecuteScan
 	cmd.Flags().StringVar(&stepConfig.GlobalSettingsFile, "globalSettingsFile", os.Getenv("PIPER_globalSettingsFile"), "Path to the mvn settings file that should be used as global settings file.")
 	cmd.Flags().StringVar(&stepConfig.DatabaseCreateFlags, "databaseCreateFlags", os.Getenv("PIPER_databaseCreateFlags"), "A space-separated string of flags for the 'codeql database create' command.")
 	cmd.Flags().StringVar(&stepConfig.DatabaseAnalyzeFlags, "databaseAnalyzeFlags", os.Getenv("PIPER_databaseAnalyzeFlags"), "A space-separated string of flags for the 'codeql database analyze' command.")
+	cmd.Flags().StringVar(&stepConfig.CustomCommand, "customCommand", os.Getenv("PIPER_customCommand"), "A custom user-defined command to run between codeql analysis and results upload.")
+	cmd.Flags().StringVar(&stepConfig.TransformQuerySuite, "transformQuerySuite", os.Getenv("PIPER_transformQuerySuite"), "A transform string that will be applied to the querySuite using the sed command.")
+	cmd.Flags().StringVar(&stepConfig.Paths, "paths", os.Getenv("PIPER_paths"), "List of file or directory patterns to include.\nEach entry must be on its own line, e.g.:\n  src/**\n  lib/**\nNote: This parameter is only applicable for interpreted languages.\n")
+	cmd.Flags().StringVar(&stepConfig.PathsIgnore, "pathsIgnore", os.Getenv("PIPER_pathsIgnore"), "List of file or directory patterns to ignore.\nEach entry must be on its own line, e.g.:\n  **/*.md\n  docs/**\nNote: This parameter is only applicable for interpreted languages.\n")
 
 	cmd.MarkFlagRequired("buildTool")
 }
@@ -526,6 +565,42 @@ func codeqlExecuteScanMetadata() config.StepData {
 						Mandatory:   false,
 						Aliases:     []config.Alias{},
 						Default:     os.Getenv("PIPER_databaseAnalyzeFlags"),
+					},
+					{
+						Name:        "customCommand",
+						ResourceRef: []config.ResourceReference{},
+						Scope:       []string{"STEPS", "STAGES", "PARAMETERS"},
+						Type:        "string",
+						Mandatory:   false,
+						Aliases:     []config.Alias{},
+						Default:     os.Getenv("PIPER_customCommand"),
+					},
+					{
+						Name:        "transformQuerySuite",
+						ResourceRef: []config.ResourceReference{},
+						Scope:       []string{"STEPS", "STAGES", "PARAMETERS"},
+						Type:        "string",
+						Mandatory:   false,
+						Aliases:     []config.Alias{},
+						Default:     os.Getenv("PIPER_transformQuerySuite"),
+					},
+					{
+						Name:        "paths",
+						ResourceRef: []config.ResourceReference{},
+						Scope:       []string{"STEPS", "STAGES", "PARAMETERS"},
+						Type:        "string",
+						Mandatory:   false,
+						Aliases:     []config.Alias{},
+						Default:     os.Getenv("PIPER_paths"),
+					},
+					{
+						Name:        "pathsIgnore",
+						ResourceRef: []config.ResourceReference{},
+						Scope:       []string{"STEPS", "STAGES", "PARAMETERS"},
+						Type:        "string",
+						Mandatory:   false,
+						Aliases:     []config.Alias{},
+						Default:     os.Getenv("PIPER_pathsIgnore"),
 					},
 				},
 			},

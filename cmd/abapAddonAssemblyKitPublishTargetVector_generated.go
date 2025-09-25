@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/SAP/jenkins-library/pkg/config"
+	"github.com/SAP/jenkins-library/pkg/gcp"
 	"github.com/SAP/jenkins-library/pkg/log"
 	"github.com/SAP/jenkins-library/pkg/splunk"
 	"github.com/SAP/jenkins-library/pkg/telemetry"
@@ -55,15 +56,29 @@ For Terminology refer to the [Scenario Description](https://www.project-piper.io
 
 			GeneralConfig.GitHubAccessTokens = ResolveAccessTokens(GeneralConfig.GitHubTokens)
 
-			path, _ := os.Getwd()
+			path, err := os.Getwd()
+			if err != nil {
+				return err
+			}
 			fatalHook := &log.FatalHook{CorrelationID: GeneralConfig.CorrelationID, Path: path}
 			log.RegisterHook(fatalHook)
 
-			err := PrepareConfig(cmd, &metadata, STEP_NAME, &stepConfig, config.OpenPiperFile)
+			err = PrepareConfig(cmd, &metadata, STEP_NAME, &stepConfig, config.OpenPiperFile)
 			if err != nil {
 				log.SetErrorCategory(log.ErrorConfiguration)
 				return err
 			}
+
+			// Set step error patterns for improved error detection
+			stepErrors := make([]log.StepError, len(metadata.Metadata.Errors))
+			for i, err := range metadata.Metadata.Errors {
+				stepErrors[i] = log.StepError{
+					Pattern:  err.Pattern,
+					Message:  err.Message,
+					Category: err.Category,
+				}
+			}
+			log.SetStepErrors(stepErrors)
 			log.RegisterSecret(stepConfig.AbapAddonAssemblyKitCertificateFile)
 			log.RegisterSecret(stepConfig.AbapAddonAssemblyKitCertificatePass)
 			log.RegisterSecret(stepConfig.Username)
@@ -97,6 +112,11 @@ For Terminology refer to the [Scenario Description](https://www.project-piper.io
 			return nil
 		},
 		Run: func(_ *cobra.Command, _ []string) {
+			vaultClient := config.GlobalVaultClient()
+			if vaultClient != nil {
+				defer vaultClient.MustRevokeToken()
+			}
+
 			stepTelemetryData := telemetry.CustomData{}
 			stepTelemetryData.ErrorCode = "1"
 			handler := func() {
@@ -105,7 +125,7 @@ For Terminology refer to the [Scenario Description](https://www.project-piper.io
 				stepTelemetryData.ErrorCategory = log.GetErrorCategory().String()
 				stepTelemetryData.PiperCommitHash = GitCommit
 				telemetryClient.SetData(&stepTelemetryData)
-				telemetryClient.Send()
+				telemetryClient.LogStepTelemetryData()
 				if len(GeneralConfig.HookConfig.SplunkConfig.Dsn) > 0 {
 					splunkClient.Initialize(GeneralConfig.CorrelationID,
 						GeneralConfig.HookConfig.SplunkConfig.Dsn,
@@ -122,10 +142,23 @@ For Terminology refer to the [Scenario Description](https://www.project-piper.io
 						GeneralConfig.HookConfig.SplunkConfig.SendLogs)
 					splunkClient.Send(telemetryClient.GetData(), logCollector)
 				}
+				if GeneralConfig.HookConfig.GCPPubSubConfig.Enabled {
+					err := gcp.NewGcpPubsubClient(
+						vaultClient,
+						GeneralConfig.HookConfig.GCPPubSubConfig.ProjectNumber,
+						GeneralConfig.HookConfig.GCPPubSubConfig.IdentityPool,
+						GeneralConfig.HookConfig.GCPPubSubConfig.IdentityProvider,
+						GeneralConfig.CorrelationID,
+						GeneralConfig.HookConfig.OIDCConfig.RoleID,
+					).Publish(GeneralConfig.HookConfig.GCPPubSubConfig.Topic, telemetryClient.GetDataBytes())
+					if err != nil {
+						log.Entry().WithError(err).Warn("event publish failed")
+					}
+				}
 			}
 			log.DeferExitHandler(handler)
 			defer handler()
-			telemetryClient.Initialize(GeneralConfig.NoTelemetry, STEP_NAME, GeneralConfig.HookConfig.PendoConfig.Token)
+			telemetryClient.Initialize(STEP_NAME)
 			abapAddonAssemblyKitPublishTargetVector(stepConfig, &stepTelemetryData)
 			stepTelemetryData.ErrorCode = "0"
 			log.Entry().Info("SUCCESS")
@@ -143,7 +176,7 @@ func addAbapAddonAssemblyKitPublishTargetVectorFlags(cmd *cobra.Command, stepCon
 	cmd.Flags().StringVar(&stepConfig.Username, "username", os.Getenv("PIPER_username"), "User for the Addon Assembly Kit as a Service (AAKaaS) system")
 	cmd.Flags().StringVar(&stepConfig.Password, "password", os.Getenv("PIPER_password"), "Password for the Addon Assembly Kit as a Service (AAKaaS) system")
 	cmd.Flags().StringVar(&stepConfig.TargetVectorScope, "targetVectorScope", `T`, "Determines whether the Target Vector is published to the productive ('P') or test ('T') environment")
-	cmd.Flags().IntVar(&stepConfig.MaxRuntimeInMinutes, "maxRuntimeInMinutes", 16, "Maximum runtime for status polling in minutes")
+	cmd.Flags().IntVar(&stepConfig.MaxRuntimeInMinutes, "maxRuntimeInMinutes", 90, "Maximum runtime for status polling in minutes")
 	cmd.Flags().IntVar(&stepConfig.PollingIntervalInSeconds, "pollingIntervalInSeconds", 60, "Wait time in seconds between polling calls")
 	cmd.Flags().StringVar(&stepConfig.AddonDescriptor, "addonDescriptor", os.Getenv("PIPER_addonDescriptor"), "Structure in the commonPipelineEnvironment containing information about the Product Version and corresponding Software Component Versions")
 	cmd.Flags().StringVar(&stepConfig.AbapAddonAssemblyKitOriginHash, "abapAddonAssemblyKitOriginHash", os.Getenv("PIPER_abapAddonAssemblyKitOriginHash"), "Origin Hash for restricted AAKaaS scenarios")
@@ -241,7 +274,7 @@ func abapAddonAssemblyKitPublishTargetVectorMetadata() config.StepData {
 						Type:        "int",
 						Mandatory:   false,
 						Aliases:     []config.Alias{},
-						Default:     16,
+						Default:     90,
 					},
 					{
 						Name:        "pollingIntervalInSeconds",

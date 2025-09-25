@@ -10,6 +10,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/SAP/jenkins-library/pkg/piperutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -63,7 +64,14 @@ func TestPollEntity(t *testing.T) {
 		repo := Repository{Name: "testRepo1"}
 		api, _ := swcManager.GetAPI(con, repo)
 
-		status, _ := PollEntity(api, 0)
+		var reports []piperutils.Path
+		logOutputManager := LogOutputManager{
+			LogOutput:   "STANDARD",
+			PiperStep:   "pull",
+			StepReports: reports,
+		}
+
+		status, _ := PollEntity(api, 0, &logOutputManager)
 		assert.Equal(t, "S", status)
 		assert.Equal(t, 0, len(client.BodyList), "Not all requests were done")
 	})
@@ -95,7 +103,14 @@ func TestPollEntity(t *testing.T) {
 		repo := Repository{Name: "testRepo1"}
 		api, _ := swcManager.GetAPI(con, repo)
 
-		status, _ := PollEntity(api, 0)
+		var reports []piperutils.Path
+		logOutputManager := LogOutputManager{
+			LogOutput:   "STANDARD",
+			PiperStep:   "pull",
+			StepReports: reports,
+		}
+
+		status, _ := PollEntity(api, 0, &logOutputManager)
 		assert.Equal(t, "E", status)
 		assert.Equal(t, 0, len(client.BodyList), "Not all requests were done")
 	})
@@ -268,7 +283,7 @@ func TestCreateRequestBodies(t *testing.T) {
 			CommitID: "1234567",
 			Tag:      "myTag",
 		}
-		body := repo.GetCloneRequestBody()
+		body, _ := repo.GetCloneRequestBody()
 		assert.Equal(t, `{"branch_name":"main", "commit_id":"1234567"}`, body, "Expected different body")
 	})
 	t.Run("Clone Body Tag", func(t *testing.T) {

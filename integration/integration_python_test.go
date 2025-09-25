@@ -14,11 +14,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 )
 
 func TestPythonIntegrationBuildProject(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 	ctx := context.Background()
 	pwd, err := os.Getwd()
 	assert.NoError(t, err, "Getting current working directory failed.")
@@ -39,20 +40,21 @@ func TestPythonIntegrationBuildProject(t *testing.T) {
 	os.WriteFile(filepath.Join(tempDir, "runPiper.sh"), []byte(testScript), 0700)
 
 	reqNode := testcontainers.ContainerRequest{
-		Image: "python:3.9",
+		Image: "python:3.10",
 		Cmd:   []string{"tail", "-f"},
-		BindMounts: map[string]string{
-			pwd:     "/piperbin",
-			tempDir: "/test",
-		},
+		Mounts: testcontainers.Mounts(
+			testcontainers.BindMount(pwd, "/piperbin"),
+			testcontainers.BindMount(tempDir, "/test"),
+		),
 	}
 
 	nodeContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: reqNode,
 		Started:          true,
 	})
+	require.NoError(t, err)
 
-	code, err := nodeContainer.Exec(ctx, []string{"sh", "/test/runPiper.sh"})
+	code, _, err := nodeContainer.Exec(ctx, []string{"sh", "/test/runPiper.sh"})
 	assert.NoError(t, err)
 	assert.Equal(t, 0, code)
 
@@ -62,9 +64,9 @@ func TestPythonIntegrationBuildProject(t *testing.T) {
 	}
 	output := string(content)
 
-	assert.Contains(t, output, "info  pythonBuild - running command: python setup.py sdist bdist_wheel")
-	assert.Contains(t, output, "info  pythonBuild - running command: piperBuild-env/bin/pip install --upgrade cyclonedx-bom")
-	assert.Contains(t, output, "info  pythonBuild - running command: piperBuild-env/bin/cyclonedx-py --e --output bom-pip.xml")
+	assert.Contains(t, output, "info  pythonBuild - running command: piperBuild-env/bin/python setup.py sdist bdist_wheel")
+	assert.Contains(t, output, "info  pythonBuild - running command: piperBuild-env/bin/pip install --upgrade --root-user-action=ignore cyclonedx-bom==")
+	assert.Contains(t, output, "info  pythonBuild - running command: piperBuild-env/bin/cyclonedx-py env --output-file bom-pip.xml")
 	assert.Contains(t, output, "info  pythonBuild - SUCCESS")
 
 	//workaround to use test script util it is possible to set workdir for Exec call
@@ -73,7 +75,7 @@ func TestPythonIntegrationBuildProject(t *testing.T) {
 		ls -l . dist build >files-list.txt 2>&1`)
 	os.WriteFile(filepath.Join(tempDir, "runPiper.sh"), []byte(testScript), 0700)
 
-	code, err = nodeContainer.Exec(ctx, []string{"sh", "/test/runPiper.sh"})
+	code, _, err = nodeContainer.Exec(ctx, []string{"sh", "/test/runPiper.sh"})
 	assert.NoError(t, err)
 	assert.Equal(t, 0, code)
 

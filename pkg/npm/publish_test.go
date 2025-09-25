@@ -4,22 +4,35 @@
 package npm
 
 import (
-	"github.com/SAP/jenkins-library/pkg/mock"
 	"io"
 	"path/filepath"
+	"slices"
 	"testing"
 
+	piperhttp "github.com/SAP/jenkins-library/pkg/http"
+	"github.com/SAP/jenkins-library/pkg/mock"
 	"github.com/SAP/jenkins-library/pkg/piperutils"
+
+	"github.com/SAP/jenkins-library/pkg/versioning"
 	"github.com/stretchr/testify/assert"
 )
 
 type npmMockUtilsBundleRelativeGlob struct {
 	*mock.FilesMockRelativeGlob
-	execRunner *mock.ExecMockRunner
+	execRunner     *mock.ExecMockRunner
+	downloadClient piperhttp.Downloader
 }
 
 func (u *npmMockUtilsBundleRelativeGlob) GetExecRunner() ExecRunner {
 	return u.execRunner
+}
+
+func (u *npmMockUtilsBundleRelativeGlob) GetFileUtils() piperutils.FileUtils {
+	return u.FilesMock
+}
+
+func (u *npmMockUtilsBundleRelativeGlob) GetDownloadUtils() piperhttp.Downloader {
+	return u.downloadClient
 }
 
 func newNpmMockUtilsBundleRelativeGlob() npmMockUtilsBundleRelativeGlob {
@@ -529,12 +542,13 @@ func TestNpmPublish(t *testing.T) {
 
 			// This stub simulates the behavior of npm pack and puts a tgz into the requested
 			utils.execRunner.Stub = func(call string, stdoutReturn map[string]string, shouldFailOnCommand map[string]error, stdout io.Writer) error {
-				//tgzTargetPath := filepath.Dir(test.packageDescriptors[0])
+				// tgzTargetPath := filepath.Dir(test.packageDescriptors[0])
 				utils.AddFile(filepath.Join(".", "package.tgz"), []byte("this is a tgz file"))
 				return nil
 			}
 
-			err := exec.PublishAllPackages(test.packageDescriptors, test.registryURL, test.registryUser, test.registryPassword, test.packBeforePublish)
+			coordinates := []versioning.Coordinates{}
+			err := exec.PublishAllPackages(test.packageDescriptors, test.registryURL, test.registryUser, test.registryPassword, test.packBeforePublish, &coordinates)
 
 			if len(test.wants.err) == 0 && assert.NoError(t, err) {
 				if assert.NotEmpty(t, utils.execRunner.Calls) {
@@ -545,12 +559,12 @@ func TestNpmPublish(t *testing.T) {
 					assert.Equal(t, "publish", publishCmd.Params[0])
 
 					if len(test.wants.tarballPath) > 0 && assert.Contains(t, publishCmd.Params, "--tarball") {
-						tarballPath := publishCmd.Params[piperutils.FindString(publishCmd.Params, "--tarball")+1]
+						tarballPath := publishCmd.Params[slices.Index(publishCmd.Params, "--tarball")+1]
 						assert.Equal(t, test.wants.tarballPath, filepath.ToSlash(tarballPath))
 					}
 
 					if assert.Contains(t, publishCmd.Params, "--userconfig") {
-						effectivePublishConfigPath := publishCmd.Params[piperutils.FindString(publishCmd.Params, "--userconfig")+1]
+						effectivePublishConfigPath := publishCmd.Params[slices.Index(publishCmd.Params, "--userconfig")+1]
 
 						assert.Regexp(t, test.wants.publishConfigPath, filepath.ToSlash(effectivePublishConfigPath))
 

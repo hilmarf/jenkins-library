@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/SAP/jenkins-library/pkg/config"
+	"github.com/SAP/jenkins-library/pkg/gcp"
 	"github.com/SAP/jenkins-library/pkg/log"
 	"github.com/SAP/jenkins-library/pkg/piperenv"
 	"github.com/SAP/jenkins-library/pkg/splunk"
@@ -25,6 +26,7 @@ type abapAddonAssemblyKitCheckOptions struct {
 	Password                            string `json:"password,omitempty"`
 	AddonDescriptorFileName             string `json:"addonDescriptorFileName,omitempty"`
 	AddonDescriptor                     string `json:"addonDescriptor,omitempty"`
+	AbapAddonAssemblyKitOriginHash      string `json:"abapAddonAssemblyKitOriginHash,omitempty"`
 }
 
 type abapAddonAssemblyKitCheckCommonPipelineEnvironment struct {
@@ -70,11 +72,9 @@ func AbapAddonAssemblyKitCheckCommand() *cobra.Command {
 	var createAbapAddonAssemblyKitCheckCmd = &cobra.Command{
 		Use:   STEP_NAME,
 		Short: "This step calls AAKaaS to check the validity of the Addon Product Modelling.",
-		Long: `This step does the following:<ul>
-  <li>[The Addon Product Modelling](https://www.project-piper.io/scenarios/abapEnvironmentAddons/#add-on-descriptor-file) is read from the <b>addonDescriptorFileName</b> (e.g. addon.yml)</li>
-  <li>A connection to AAKaaS (Addon Assembly Kit as a Service) is established and the Addon Product Modelling is transfered for detailed [checks](https://www.project-piper.io/scenarios/abapEnvironmentAddons/#versioning-rules)</li>
-  <li>The semantic versions are resolved and stored into the piper commonPipelineEnviroment for usage of subsequent pipeline steps</li>
-</ul>
+		Long: `[The Addon Product Modelling](https://www.project-piper.io/scenarios/abapEnvironmentAddons/#add-on-descriptor-file) is read from the <b>addonDescriptorFileName</b> (e.g. addon.yml).
+A connection to AAKaaS (Addon Assembly Kit as a Service) is established and the Addon Product Modelling is transfered for detailed [checks](https://www.project-piper.io/scenarios/abapEnvironmentAddons/#versioning-rules).
+The semantic versions are resolved and stored into the piper commonPipelineEnviroment for usage in subsequent pipeline steps.
 <br />
 For logon to AAKaaS you can either provide a credential with basic authorization (username and password) or two secret text credentials containing the technical s-users certificate (see note [2805811](https://me.sap.com/notes/2805811) for download) as base64 encoded string and the password to decrypt the file
 <br />
@@ -86,19 +86,34 @@ For Terminology refer to the [Scenario Description](https://www.project-piper.io
 
 			GeneralConfig.GitHubAccessTokens = ResolveAccessTokens(GeneralConfig.GitHubTokens)
 
-			path, _ := os.Getwd()
+			path, err := os.Getwd()
+			if err != nil {
+				return err
+			}
 			fatalHook := &log.FatalHook{CorrelationID: GeneralConfig.CorrelationID, Path: path}
 			log.RegisterHook(fatalHook)
 
-			err := PrepareConfig(cmd, &metadata, STEP_NAME, &stepConfig, config.OpenPiperFile)
+			err = PrepareConfig(cmd, &metadata, STEP_NAME, &stepConfig, config.OpenPiperFile)
 			if err != nil {
 				log.SetErrorCategory(log.ErrorConfiguration)
 				return err
 			}
+
+			// Set step error patterns for improved error detection
+			stepErrors := make([]log.StepError, len(metadata.Metadata.Errors))
+			for i, err := range metadata.Metadata.Errors {
+				stepErrors[i] = log.StepError{
+					Pattern:  err.Pattern,
+					Message:  err.Message,
+					Category: err.Category,
+				}
+			}
+			log.SetStepErrors(stepErrors)
 			log.RegisterSecret(stepConfig.AbapAddonAssemblyKitCertificateFile)
 			log.RegisterSecret(stepConfig.AbapAddonAssemblyKitCertificatePass)
 			log.RegisterSecret(stepConfig.Username)
 			log.RegisterSecret(stepConfig.Password)
+			log.RegisterSecret(stepConfig.AbapAddonAssemblyKitOriginHash)
 
 			if len(GeneralConfig.HookConfig.SentryConfig.Dsn) > 0 {
 				sentryHook := log.NewSentryHook(GeneralConfig.HookConfig.SentryConfig.Dsn, GeneralConfig.CorrelationID)
@@ -127,6 +142,11 @@ For Terminology refer to the [Scenario Description](https://www.project-piper.io
 			return nil
 		},
 		Run: func(_ *cobra.Command, _ []string) {
+			vaultClient := config.GlobalVaultClient()
+			if vaultClient != nil {
+				defer vaultClient.MustRevokeToken()
+			}
+
 			stepTelemetryData := telemetry.CustomData{}
 			stepTelemetryData.ErrorCode = "1"
 			handler := func() {
@@ -136,7 +156,7 @@ For Terminology refer to the [Scenario Description](https://www.project-piper.io
 				stepTelemetryData.ErrorCategory = log.GetErrorCategory().String()
 				stepTelemetryData.PiperCommitHash = GitCommit
 				telemetryClient.SetData(&stepTelemetryData)
-				telemetryClient.Send()
+				telemetryClient.LogStepTelemetryData()
 				if len(GeneralConfig.HookConfig.SplunkConfig.Dsn) > 0 {
 					splunkClient.Initialize(GeneralConfig.CorrelationID,
 						GeneralConfig.HookConfig.SplunkConfig.Dsn,
@@ -153,10 +173,23 @@ For Terminology refer to the [Scenario Description](https://www.project-piper.io
 						GeneralConfig.HookConfig.SplunkConfig.SendLogs)
 					splunkClient.Send(telemetryClient.GetData(), logCollector)
 				}
+				if GeneralConfig.HookConfig.GCPPubSubConfig.Enabled {
+					err := gcp.NewGcpPubsubClient(
+						vaultClient,
+						GeneralConfig.HookConfig.GCPPubSubConfig.ProjectNumber,
+						GeneralConfig.HookConfig.GCPPubSubConfig.IdentityPool,
+						GeneralConfig.HookConfig.GCPPubSubConfig.IdentityProvider,
+						GeneralConfig.CorrelationID,
+						GeneralConfig.HookConfig.OIDCConfig.RoleID,
+					).Publish(GeneralConfig.HookConfig.GCPPubSubConfig.Topic, telemetryClient.GetDataBytes())
+					if err != nil {
+						log.Entry().WithError(err).Warn("event publish failed")
+					}
+				}
 			}
 			log.DeferExitHandler(handler)
 			defer handler()
-			telemetryClient.Initialize(GeneralConfig.NoTelemetry, STEP_NAME, GeneralConfig.HookConfig.PendoConfig.Token)
+			telemetryClient.Initialize(STEP_NAME)
 			abapAddonAssemblyKitCheck(stepConfig, &stepTelemetryData, &commonPipelineEnvironment)
 			stepTelemetryData.ErrorCode = "0"
 			log.Entry().Info("SUCCESS")
@@ -175,6 +208,7 @@ func addAbapAddonAssemblyKitCheckFlags(cmd *cobra.Command, stepConfig *abapAddon
 	cmd.Flags().StringVar(&stepConfig.Password, "password", os.Getenv("PIPER_password"), "Password for the Addon Assembly Kit as a Service (AAKaaS) system")
 	cmd.Flags().StringVar(&stepConfig.AddonDescriptorFileName, "addonDescriptorFileName", `addon.yml`, "File name of the YAML file which describes the Product Version and corresponding Software Component Versions")
 	cmd.Flags().StringVar(&stepConfig.AddonDescriptor, "addonDescriptor", os.Getenv("PIPER_addonDescriptor"), "Structure in the commonPipelineEnvironment containing information about the Product Version and corresponding Software Component Versions")
+	cmd.Flags().StringVar(&stepConfig.AbapAddonAssemblyKitOriginHash, "abapAddonAssemblyKitOriginHash", os.Getenv("PIPER_abapAddonAssemblyKitOriginHash"), "Origin Hash for restricted AAKaaS scenarios")
 
 	cmd.MarkFlagRequired("abapAddonAssemblyKitEndpoint")
 	cmd.MarkFlagRequired("addonDescriptorFileName")
@@ -275,6 +309,15 @@ func abapAddonAssemblyKitCheckMetadata() config.StepData {
 						Mandatory: false,
 						Aliases:   []config.Alias{},
 						Default:   os.Getenv("PIPER_addonDescriptor"),
+					},
+					{
+						Name:        "abapAddonAssemblyKitOriginHash",
+						ResourceRef: []config.ResourceReference{},
+						Scope:       []string{"PARAMETERS"},
+						Type:        "string",
+						Mandatory:   false,
+						Aliases:     []config.Alias{},
+						Default:     os.Getenv("PIPER_abapAddonAssemblyKitOriginHash"),
 					},
 				},
 			},

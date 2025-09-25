@@ -15,7 +15,7 @@ jobs:
       - uses: styfle/cancel-workflow-action@0.11.0
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21.x'
+          go-version: '1.24.0'
       - name: Cache Golang Packages
         uses: actions/cache@v3
         with:
@@ -28,22 +28,13 @@ jobs:
       - name: unit-test
         id: unit-test
         run: go test -tags=unit ./... -coverprofile cover.out
-      # run code coverage upload to code climate on main branch since PR branch will not have access to secret
-      - name: unit-test-code-climate-upload
-        if: ${{ (github.event_name != 'pull_request') || (github.event.pull_request.head.repo.full_name == github.repository) }}
-        uses: paambaati/codeclimate-action@v5
-        env:
-          CC_TEST_REPORTER_ID: ${{ secrets.CODE_CLIMATE_REPORTER_ID }}
-        with:
-          coverageLocations: cover.out:gocov
-          # truncate package name from file paths in report
-          prefix: github.com/SAP/jenkins-library/
+
   format:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21.x'
+          go-version: '1.24.0'
       - name: Cache Golang Packages
         uses: actions/cache@v3
         with:
@@ -63,7 +54,7 @@ jobs:
     steps:
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21.x'
+          go-version: '1.24.0'
       - name: checkout
         uses: actions/checkout@v4
         with:
@@ -78,7 +69,7 @@ jobs:
     steps:
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21.x'
+          go-version: '1.24.0'
       - name: Cache Golang Packages
         uses: actions/cache@v3
         with:
@@ -98,7 +89,7 @@ jobs:
     steps:
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21.x'
+          go-version: '1.24.0'
       - name: Cache Golang Packages
         uses: actions/cache@v3
         with:

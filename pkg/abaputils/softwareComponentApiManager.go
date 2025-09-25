@@ -59,7 +59,8 @@ type SoftwareComponentApiInterface interface {
 	setSleepTimeConfig(timeUnit time.Duration, maxSleepTime time.Duration)
 	getSleepTime(n int) (time.Duration, error)
 	getUUID() string
-	GetRepository() (bool, string, error)
+	getRepositoryName() string
+	GetRepository() (bool, string, error, bool)
 	Clone() error
 	Pull() error
 	CheckoutBranch() error
@@ -67,7 +68,10 @@ type SoftwareComponentApiInterface interface {
 	CreateTag(tag Tag) error
 	GetLogOverview() ([]LogResultsV2, error)
 	GetLogProtocol(LogResultsV2, int) (result []LogProtocol, count int, err error)
+	ConvertTime(logTimeStamp string) time.Time
 	GetExecutionLog() (ExecutionLog, error)
+	GetLogArchive() (result []byte, err error)
+	UpdateRepoWithBYOGCredentials(string, string, string)
 }
 
 /****************************************
@@ -127,6 +131,7 @@ type CloneEntity struct {
 type RepositoryEntity struct {
 	Metadata     AbapMetadata `json:"__metadata"`
 	ScName       string       `json:"sc_name"`
+	ByogUrl      string       `json:"url"`
 	ActiveBranch string       `json:"active_branch"`
 	AvailOnInst  bool         `json:"avail_on_inst"`
 }
@@ -200,6 +205,9 @@ type RepositoriesConfig struct {
 	BranchName      string
 	CommitID        string
 	RepositoryName  string
+	ByogUsername    string
+	ByogPassword    string
+	ByogAuthMethod  string
 	RepositoryNames []string
 	Repositories    string
 }

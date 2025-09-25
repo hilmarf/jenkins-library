@@ -29,7 +29,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/xuri/excelize/v2"
 
-	"github.com/google/go-github/v45/github"
+	"github.com/google/go-github/v68/github"
 )
 
 // ScanOptions is just used to make the lines less long
@@ -76,11 +76,60 @@ func (w *whitesourceUtilsBundle) FileOpen(name string, flag int, perm os.FileMod
 }
 
 func (w *whitesourceUtilsBundle) GetArtifactCoordinates(buildTool, buildDescriptorFile string, options *versioning.Options) (versioning.Coordinates, error) {
+	if err := validationBuildDescriptorFile(buildTool, buildDescriptorFile); err != nil {
+		return versioning.Coordinates{}, err
+	}
 	artifact, err := versioning.GetArtifact(buildTool, buildDescriptorFile, options, w)
 	if err != nil {
 		return versioning.Coordinates{}, err
 	}
 	return artifact.GetCoordinates()
+}
+
+func validationBuildDescriptorFile(buildTool, buildDescriptorFile string) error {
+	if buildDescriptorFile == "" {
+		return nil
+	}
+	switch buildTool {
+	case "dub":
+		if filepath.Ext(buildDescriptorFile) != ".json" {
+			return errors.New("extension of buildDescriptorFile must be in '*.json'")
+		}
+	case "gradle":
+		if filepath.Ext(buildDescriptorFile) != ".properties" {
+			return errors.New("extension of buildDescriptorFile must be in '*.properties'")
+		}
+	case "golang":
+		if !strings.HasSuffix(buildDescriptorFile, "go.mod") &&
+			!strings.HasSuffix(buildDescriptorFile, "VERSION") &&
+			!strings.HasSuffix(buildDescriptorFile, "version.txt") {
+			return errors.New("buildDescriptorFile must be one of  [\"go.mod\",\"VERSION\", \"version.txt\"]")
+		}
+	case "maven":
+		if filepath.Ext(buildDescriptorFile) != ".xml" {
+			return errors.New("extension of buildDescriptorFile must be in '*.xml'")
+		}
+	case "mta":
+		if filepath.Ext(buildDescriptorFile) != ".yaml" {
+			return errors.New("extension of buildDescriptorFile must be in '*.yaml'")
+		}
+	case "npm", "yarn":
+		if filepath.Ext(buildDescriptorFile) != ".json" {
+			return errors.New("extension of buildDescriptorFile must be in '*.json'")
+		}
+	case "pip":
+		if !strings.HasSuffix(buildDescriptorFile, "setup.py") &&
+			!strings.HasSuffix(buildDescriptorFile, "version.txt") &&
+			!strings.HasSuffix(buildDescriptorFile, "VERSION") {
+			return errors.New("buildDescriptorFile must be one of  [\"setup.py\",\"version.txt\", \"VERSION\"]")
+		}
+	case "sbt":
+		if !strings.HasSuffix(buildDescriptorFile, "sbtDescriptor.json") &&
+			!strings.HasSuffix(buildDescriptorFile, "build.sbt") {
+			return errors.New("extension of buildDescriptorFile must be in '*.json' or '*sbt'")
+		}
+	}
+	return nil
 }
 
 func (w *whitesourceUtilsBundle) getNpmExecutor(config *ws.ScanOptions) npm.Executor {
@@ -149,6 +198,7 @@ func whitesourceExecuteScan(config ScanOptions, _ *telemetry.CustomData, commonP
 		log.Entry().WithError(err).Warning("Failed to get GitHub client")
 	}
 	if log.IsVerbose() {
+		logConfigInVerboseModeForWhitesource(config)
 		logWorkspaceContent()
 	}
 	utils := newWhitesourceUtils(&config, client)
@@ -307,7 +357,7 @@ func checkAndReportScanResults(ctx context.Context, config *ScanOptions, scan *w
 	}
 
 	if len(checkErrors) > 0 {
-		return reportPaths, fmt.Errorf(strings.Join(checkErrors, ": "))
+		return reportPaths, errors.New(strings.Join(checkErrors, ": "))
 	}
 	return reportPaths, nil
 }
@@ -469,34 +519,37 @@ func validateProductVersion(version string) string {
 
 func wsScanOptions(config *ScanOptions) *ws.ScanOptions {
 	return &ws.ScanOptions{
-		BuildTool:                   config.BuildTool,
-		ScanType:                    "", // no longer provided via config
-		OrgToken:                    config.OrgToken,
-		UserToken:                   config.UserToken,
-		ProductName:                 config.ProductName,
-		ProductToken:                config.ProductToken,
-		ProductVersion:              config.Version,
-		ProjectName:                 config.ProjectName,
-		BuildDescriptorFile:         config.BuildDescriptorFile,
-		BuildDescriptorExcludeList:  config.BuildDescriptorExcludeList,
-		PomPath:                     config.BuildDescriptorFile,
-		M2Path:                      config.M2Path,
-		GlobalSettingsFile:          config.GlobalSettingsFile,
-		ProjectSettingsFile:         config.ProjectSettingsFile,
-		InstallArtifacts:            config.InstallArtifacts,
-		DefaultNpmRegistry:          config.DefaultNpmRegistry,
-		AgentDownloadURL:            config.AgentDownloadURL,
-		AgentFileName:               config.AgentFileName,
-		ConfigFilePath:              config.ConfigFilePath,
-		Includes:                    config.Includes,
-		Excludes:                    config.Excludes,
-		JreDownloadURL:              config.JreDownloadURL,
-		AgentURL:                    config.AgentURL,
-		ServiceURL:                  config.ServiceURL,
-		ScanPath:                    config.ScanPath,
-		InstallCommand:              config.InstallCommand,
-		Verbose:                     GeneralConfig.Verbose,
-		SkipParentProjectResolution: config.SkipParentProjectResolution,
+		BuildTool:                       config.BuildTool,
+		ScanType:                        "", // no longer provided via config
+		OrgToken:                        config.OrgToken,
+		UserToken:                       config.UserToken,
+		ProductName:                     config.ProductName,
+		ProductToken:                    config.ProductToken,
+		ProductVersion:                  config.Version,
+		ProjectName:                     config.ProjectName,
+		BuildDescriptorFile:             config.BuildDescriptorFile,
+		BuildDescriptorExcludeList:      config.BuildDescriptorExcludeList,
+		PomPath:                         config.BuildDescriptorFile,
+		M2Path:                          config.M2Path,
+		GlobalSettingsFile:              config.GlobalSettingsFile,
+		ProjectSettingsFile:             config.ProjectSettingsFile,
+		InstallArtifacts:                config.InstallArtifacts,
+		DefaultNpmRegistry:              config.DefaultNpmRegistry,
+		NpmIncludeDevDependencies:       config.NpmIncludeDevDependencies,
+		AgentDownloadURL:                config.AgentDownloadURL,
+		AgentFileName:                   config.AgentFileName,
+		ConfigFilePath:                  config.ConfigFilePath,
+		UseGlobalConfiguration:          config.UseGlobalConfiguration,
+		Includes:                        config.Includes,
+		Excludes:                        config.Excludes,
+		JreDownloadURL:                  config.JreDownloadURL,
+		AgentURL:                        config.AgentURL,
+		ServiceURL:                      config.ServiceURL,
+		ScanPath:                        config.ScanPath,
+		InstallCommand:                  config.InstallCommand,
+		Verbose:                         GeneralConfig.Verbose,
+		SkipParentProjectResolution:     config.SkipParentProjectResolution,
+		DisableNpmSubmodulesAggregation: config.DisableNpmSubmodulesAggregation,
 	}
 }
 
@@ -582,7 +635,7 @@ func checkPolicyViolations(ctx context.Context, config *ScanOptions, scan *ws.Sc
 		}
 	}
 	if err := utils.FileWrite(filepath.Join(reporting.StepReportDirectory, fmt.Sprintf("whitesourceExecuteScan_ip_%v.json", ws.ReportSha(config.ProductName, scan))), jsonReport, 0o666); err != nil {
-		return policyReport, errors.Wrapf(err, "failed to write json report")
+		return policyReport, errors.Wrap(err, "failed to write json report")
 	}
 	// we do not add the json report to the overall list of reports for now,
 	// since it is just an intermediary report used as input for later
@@ -671,7 +724,7 @@ func checkSecurityViolations(ctx context.Context, config *ScanOptions, scan *ws.
 		log.Entry().Debugf("Aggregated %v alerts for scanned projects", len(allAlerts))
 	}
 
-	reportPaths, errors := reportGitHubIssuesAndCreateReports(
+	reportPaths, e := reportGitHubIssuesAndCreateReports(
 		ctx,
 		config,
 		utils,
@@ -683,13 +736,13 @@ func checkSecurityViolations(ctx context.Context, config *ScanOptions, scan *ws.
 		vulnerabilitiesCount,
 	)
 
-	allOccurredErrors = append(allOccurredErrors, errors...)
+	allOccurredErrors = append(allOccurredErrors, e...)
 
 	if len(allOccurredErrors) > 0 {
 		if vulnerabilitiesCount > 0 {
 			log.SetErrorCategory(log.ErrorCompliance)
 		}
-		return reportPaths, fmt.Errorf(strings.Join(allOccurredErrors, ": "))
+		return reportPaths, errors.New(strings.Join(allOccurredErrors, ": "))
 	}
 
 	return reportPaths, nil
@@ -714,6 +767,7 @@ func collectVulnsAndLibsForProject(
 	if err != nil {
 		errorsOccurred = append(errorsOccurred, fmt.Sprint(err))
 	}
+	log.Entry().Infof("Current influx data : minor_vulnerabilities = %v / major_vulnerabilities = %v / vulnerabilities = %v", influx.whitesource_data.fields.minor_vulnerabilities, influx.whitesource_data.fields.major_vulnerabilities, influx.whitesource_data.fields.vulnerabilities)
 
 	// collect all libraries detected in all related projects and errors
 	libraries, err := sys.GetProjectHierarchy(project.Token, true)
@@ -844,9 +898,11 @@ func checkProjectSecurityViolations(config *ScanOptions, cvssSeverityLimit float
 	}
 
 	severeVulnerabilities, nonSevereVulnerabilities := ws.CountSecurityVulnerabilities(&alerts, cvssSeverityLimit)
-	influx.whitesource_data.fields.minor_vulnerabilities = nonSevereVulnerabilities
-	influx.whitesource_data.fields.major_vulnerabilities = severeVulnerabilities
-	influx.whitesource_data.fields.vulnerabilities = nonSevereVulnerabilities + severeVulnerabilities
+	influx.whitesource_data.fields.minor_vulnerabilities += nonSevereVulnerabilities
+	influx.whitesource_data.fields.major_vulnerabilities += severeVulnerabilities
+	influx.whitesource_data.fields.vulnerabilities += (nonSevereVulnerabilities + severeVulnerabilities)
+	log.Entry().Infof("Current influx data : minor_vulnerabilities = %v / major_vulnerabilities = %v / vulnerabilities = %v", influx.whitesource_data.fields.minor_vulnerabilities, influx.whitesource_data.fields.major_vulnerabilities, influx.whitesource_data.fields.vulnerabilities)
+
 	if nonSevereVulnerabilities > 0 {
 		log.Entry().Warnf("WARNING: %v Open Source Software Security vulnerabilities with "+
 			"CVSS score below threshold %.1f detected in project %s.", nonSevereVulnerabilities,
@@ -857,11 +913,11 @@ func checkProjectSecurityViolations(config *ScanOptions, cvssSeverityLimit float
 	}
 	// https://github.com/SAP/jenkins-library/blob/master/vars/whitesourceExecuteScan.groovy#L558
 	if severeVulnerabilities > 0 {
+		log.Entry().Infof("%v Open Source Software Security vulnerabilities with CVSS score greater or equal to %.1f detected in project %s", severeVulnerabilities, cvssSeverityLimit, project.Name)
 		if config.FailOnSevereVulnerabilities {
 			log.SetErrorCategory(log.ErrorCompliance)
 			return severeVulnerabilities, alerts, assessedAlerts, fmt.Errorf("%v Open Source Software Security vulnerabilities with CVSS score greater or equal to %.1f detected in project %s", severeVulnerabilities, cvssSeverityLimit, project.Name)
 		}
-		log.Entry().Infof("%v Open Source Software Security vulnerabilities with CVSS score greater or equal to %.1f detected in project %s", severeVulnerabilities, cvssSeverityLimit, project.Name)
 		log.Entry().Info("Step will only create data but not fail due to setting failOnSevereVulnerabilities: false")
 		return severeVulnerabilities, alerts, assessedAlerts, nil
 	}
@@ -1161,4 +1217,17 @@ func renameTarfilePath(tarFilepath string) error {
 		return fmt.Errorf("error renaming file %s to %s: %v", tarFilepath, newFileName, err)
 	}
 	return nil
+}
+
+// log config parameters
+func logConfigInVerboseModeForWhitesource(config ScanOptions) {
+	config.ContainerRegistryPassword = "********"
+	config.ContainerRegistryUser = "********"
+	config.DockerConfigJSON = "********"
+	config.OrgToken = "********"
+	config.UserToken = "********"
+	config.GithubToken = "********"
+	config.PrivateModulesGitToken = "********"
+	debugLog, _ := json.Marshal(config)
+	log.Entry().Debugf("Whitesource configuration: %v", string(debugLog))
 }
