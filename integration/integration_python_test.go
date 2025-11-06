@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const DOCKER_IMAGE_PYTHON = "python:3.10"
+const DOCKER_IMAGE_PYTHON = "python:3.11"
 
 func TestPythonIntegrationBuildProject(t *testing.T) {
 	t.Parallel()
@@ -25,7 +25,7 @@ func TestPythonIntegrationBuildProject(t *testing.T) {
 
 	output := RunPiper(t, container, "/python-project", "pythonBuild")
 
-	assert.Contains(t, output, "info  pythonBuild - running command: piperBuild-env/bin/python setup.py sdist bdist_wheel")
+	assert.Contains(t, output, "info  pythonBuild - running command: piperBuild-env/bin/python -m build --no-isolation")
 	assert.Contains(t, output, "info  pythonBuild - running command: piperBuild-env/bin/pip install --upgrade --root-user-action=ignore cyclonedx-bom==")
 	assert.Contains(t, output, "info  pythonBuild - running command: piperBuild-env/bin/cyclonedx-py env --output-file bom-pip.xml --output-format XML --spec-version 1.4")
 	assert.Contains(t, output, "info  pythonBuild - SUCCESS")
